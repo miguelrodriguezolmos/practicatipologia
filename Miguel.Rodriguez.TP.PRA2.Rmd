@@ -1,0 +1,249 @@
+---
+title: "PRACTICA 2 - Tipologia y ciclo de vida de los datos"
+author: "Miguel Rodriguez Olmos"
+output:
+  pdf_document:
+    number_sections: yes
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    number_sections: yes
+    theme: cosmo
+    toc: yes
+    toc_depth: 2
+---
+
+# Dataset description. 
+
+This dataset contains data about a red variant of the Portuguese 'vinho verde' (green wine). The main idea underlying this set is that the quality score of a given wine, which is in principle decided by experts, and is largely a subjective matter, can be awarded purely in terms of some chemical properties of the wine. Therefore, this dataset includes the results of 11 different chemical tests for a selection of wines,, as well as the quality score of the wine, ranking from 1 to 10.
+
+# Data loading and feature selection.
+
+We start by loading the dataset for our analysis.
+```{r, warning=FALSE, message=FALSE}
+library(ggplot2)
+df <- read.csv('winequality-red.csv')
+```
+
+We now inspect the first few observations of the dataset.
+```{r}
+head(df)
+```
+
+As a preliminary step, we will inspect the type of each variable. Notice that all variables consist on quantitative chemical tests as well as an ordered numeric quality score, so we expect all the variables to be numeric.
+
+```{r}
+apply(df, 2, class)
+```
+
+They are indeed, all numeric. Notice, however, that the quality variable is an integer. We are going to recode it into the real field since we are going to look at this variable as a dependent variable in a regression setting, and therefore we do not want to be regarded as a discrete categorical variable.
+
+```{r}
+df$quality <- as.double(df$quality)
+is.double(df$quality)
+```
+
+Next, we are going to obtain a quick summary of our dataset.
+
+```{r}
+summary(df)
+```
+
+We can see that the various variables are in different scales, which can be a problem for certain algorithms of machine learning, especially those based on distances. However we are not going to use those techniques in this work. We can also see that the dataset provided does not exhibit enough samples to cover the full range of the dependent variable `quality` which is supposed to range from 0 to 10. 
+
+As the end of the preliminary study of our data, we also look at the structure of the dataset.
+```{r}
+str(df)
+```
+
+Apart from double checking that all of our variables are numeric, we see that we have 1599 rows in our dataset.
+
+
+# Cleaning the data.
+
+We are now going to see how tidy this dataset is. In particular we are going to focus on null values, as well as zeros and outliers. The case of zero values is included since it could be the case that in observations for which some variable is not informed, it may be filled as a zero, instead of a null value. Another possibility is that some extreme value (e.g. 999) is used to this end, in which case we would have extreme values in our dataset that actually correspond to null values. Finally, outliers could also come from legitimate rare situations or they could be due to some inaccurate measure, so ideally we should be able to distinguish among these cases. 
+
+We start by looking at zeros.
+```{r}
+colSums(df==0)
+```
+
+We can see that the variable `citric.acid` is the only one with zero values, but it has a large number of them, almost a 10%. Therefore we should be careful about what to do in this situation. A quick look on Wikipedia (https://en.wikipedia.org/wiki/Acids_in_wine#Citric_acid) reveals that the grape fruit has a minimal amount of citric acid. Actually, the citric acid found in wines is most of the time added as as a supplement in order to boost the total acidity of the wine. Therefore we are going to leave those zero values as they are since there are not reasons to believe that they have not been correctly informed.
+
+
+Now for the case of null values, we will count the total number existing in the dataset.
+```{r}
+colSums(is.na(df))
+```
+
+And this shows that there are not null values in this dataset. We now look at extreme values and outliers of each variable. We will visually examine this situation using boxplots.
+```{r}
+par(mfrow = c(3, 4))
+for (i in 1:(ncol(df)-1)){
+  boxplot(df[i], main = colnames(df)[i])
+}
+```
+
+We can see that most variables present outliers, many of them in some cases. We will take, for instance the variable `residual.sugar` and count the number of outliers.
+```{r }
+length(boxplot(df$residual.sugar)$out)
+```
+
+We are getting roughly a 10% of observations detected as outliers by the boxplot function (values being more than 1.5 times IQL away from a whisker). These are obviously too many to be deleted, especially since they are distributed among many of the variables. Therefore the strategy will be to impute them with the corresponding whisker value. We will do this for all variables.
+```{r, fig.keep='none'}
+for (i in 1:(ncol(df)-1)){
+  df[df[i] > boxplot(df[i])$stats[5,], i ] = boxplot(df[i])$stats[5,]
+  df[df[i] < boxplot(df[i])$stats[1,], i ] = boxplot(df[i])$stats[1,]
+}
+```
+
+We now generate again the boxplots for the variables of our dataset and check if there are still outliers.
+```{r}
+par(mfrow = c(3, 4))
+for (i in 1:(ncol(df)-1)){
+  boxplot(df[i], main = colnames(df)[i])
+}
+```
+
+As it should be the case, we are not getting any outliers this time.
+
+# Data analysis.
+
+We will now analyze our clean data. We will start by deciding which of the variables are relevant to our analysis, and continue by testing the normality of the retained variables, which will be needed for the subsequent statistical analyses that may need this normality as a hypothesis. Finally, we will apply a linear regression in order to obtain the best linear function that explains the quality factor with respect to the relevant variables.
+
+## Feature selection. 
+
+In order to select appropriate variables for our analysis, we will perform a study of the linear correlation of the independent variables, fixing a threshold of 0.6 and removing all variables that exhibit a correlation coefficient higher than this figure with any other variable. 
+```{r}
+library(caret)
+correlationMatrix <- cor(df[,1:ncol(df)-1])
+print(correlationMatrix)
+highlyCorrelated <- findCorrelation(correlationMatrix, cutoff=0.6)
+print("the variables showing a high correlation are:")
+print(highlyCorrelated)
+```
+
+As we can see, the variables with indexes 1 and 6 are those that are highly correlated with some other variable. From the above correlation matrix we see that these are `fixed.acidity` and `free.sulfur.dioxide`. By inspection of this matrix we can see that `fixed.acidity` is highly correlated with `citric.acid`, `density` and `pH`, while `free.sulfur.dioxide` is highly correlated with `total.sulfur.dioxide`. We will inspect visually these correlations now.
+
+For `fixed.acidity` we have
+
+```{r}
+ggplot(data=df, aes(x = fixed.acidity, y = citric.acid)) + geom_point()
+ggplot(data=df, aes(x = fixed.acidity, y = density)) + geom_point()
+ggplot(data=df, aes(x = fixed.acidity, y = pH)) + geom_point()
+```
+
+And for `free.sulfur.dioxide` we have 
+
+```{r}
+ggplot(data=df, aes(x = free.sulfur.dioxide, y = total.sulfur.dioxide)) + geom_point()
+```
+
+In order to look at these visualizations with some perspective, we will now plot two variables with a very low correlation.
+```{r}
+ggplot(data=df, aes(x = volatile.acidity, y = free.sulfur.dioxide)) + geom_point()
+```
+
+We now update our dataframe by removing the two variables identified by the previous test. 
+```{r}
+df <- df[,-highlyCorrelated]
+head(df)
+```
+
+
+## Normality assumptions and homogeneity of variance. Statistical tests
+
+As a further step in our analysis we will be ultimately interested in performing a linear regression in order to model the quality of the wine with respect to the independent variables selected in the previous step. Although the computation of the best regression line does not require any particular statistical hypothesis about the distribution of our variables, should we want to provide confidence intervals for the regression coefficients the story is different. And in that situation we would be assuming that the variables follow a normal distribution. Therefore in this paragraph we are going to test for that hypothesis using Q-Q plots which gives a visual indication of the normality of a population. In our case, if a given variable is normally distributed (not necessarily standardized) we should see a straight line.
+```{r}
+for (i in 1:ncol(df)){
+  print(colnames(df)[i])
+  qqnorm(df[,i])
+}
+```
+
+We see that most variables follow a distribution close to normality within the intermediate range of their values, which is a common behavior. Exceptions to this are `residual.sugar` and `total.sulfur.dioxide`.
+
+As a possible interesting question about this particular dataset, we can check if there is a significant difference in the levels of alcohol between the highest and lowest rated wines, and see if this level is in average the same. To this end, we will perform a 2-sample T test. We will start by subsetting our dataframe in order to get a smaller one only including those wines with quality rankings of 3 or and 7 or 8, which are the two lowest and two highest levels that we have.
+```{r}
+df_small = df[df$quality == 3 | df$quality == 4 | df$quality == 7 | df$quality == 8,]
+head(df_small)
+```
+
+We will now create a label with two values 'L' or 'H' corresponding to the low and high levels.
+```{r}
+df_small$label[df_small$quality == 3 | df_small$quality == 4] = 'L'
+df_small$label[df_small$quality == 7 | df_small$quality == 8] = 'H'
+head(df_small)
+```
+
+We now compare the means of the `alcohol` variable according to the L and H groups. The null hypothesis will be that these means are equal, and therefore the amount of alcohol in low quality and high quality wines are the same. The alternative hypothesis is that these means are different. Notice that 
+
+1. In order to apply this test, which is a parametric test, we are assuming normality of the distributions and 
+
+2. This is a bilateral contrast, and therefore, if the null hypothesis is rejected the best thing we can say is that both means are significantly different, without distinguishing which one is higher.
+```{r}
+t.test(df_small$alcohol~df_small$label)
+```
+
+Since the confidence interval for the difference of means does not contain 0, we find that at a 0.05 significance level the means are not equal for low and high quality wines.
+
+As for the final statistical test that we will apply to this dataset, we are going to study the homogeneity of the variance for the variable `alcohol` among the groups given by the quality scores. To this end, we will apply the Fligner-Killeen test. As for the previous case, the null hypothesis will be that the variances are equal, and the alternative hypothesis that they are not.
+```{r}
+fligner.test(alcohol~quality, data = df)
+```
+
+Since the p-value obtained is smaller than 0.05 we can conclude that the variances are not homogeneous among all quality groups at a 0.05 significance level.
+
+## A linear regression model.
+
+Finally we are going to train a regression model for the full dataset in order to obtain the best possible linear function that predicts the dependent variable taking as arguments the surviving variables after the feature selection process. For this, we use the `lm` function implemented in base `R`.
+```{r}
+model <- lm(quality ~ ., data = df) 
+summary(model)
+```
+
+The p-values obtained show that the significant (non-zero coefficients) for this linear model at at least a 0.05 significant level are those marked with stars. As we see, this regression line does not use all the variables and in particular there is no intercept (constant) term.
+
+The total variance explained by the model is given by the adjusted $R^2$  coefficient which has a value of 0.3651. This is not a very good fit since the maximum value is 1. In our case, this coefficient indicates that 36.51% of the total variance of the dataset is explained by this model. We will now perform a prediction on the full dataset and compute the RMSE error.
+```{r}
+pred <- predict(model, df[,1:(ncol(df)-1)])
+res <- pred - df$quality
+RMSE <- sqrt((1/nrow(df))*sum( res^2   ))
+RMSE
+```
+
+This means that the typical error made by using this linear model is of 0.64, which is slightly less than one quality score point, since the RMSE value is expressed in the same units as the dependent variable.
+
+# Graphic representation of the results.
+
+We will now use two different graphical indicators to visually assess the quality of the fit for this linear model. First, we plot the actual values of `quality` versus the line $y=x$, which correspond to a perfect fit. All points outside this line are errors of the predictions of the model. The larger the vertical distance from a point to the line, the higher the error made.
+```{r}
+plot(df$quality, pred)
+abline(a=0, b=1, col = 'red')
+```
+
+Next, we are going to plot the residuals, that is, the differences of the predicted values and the actual values. This visualization should show a pattern without any particular structure, and symmetric with respect to the horizontal line $y=0$, meaning that the residuals have mean 0. That is, they are random noise.
+```{r}
+plot(res)
+abline(a=0, b=0, col = 'red')
+```
+
+We can actually compute this mean, which is equal to 
+```{r}
+mean(res)
+```
+
+This negligible figure, together with the plot of the residuals show that, indeed, the residuals are random noise.
+
+
+# Solution to the problem. 
+
+We have cleaned the `winequality-red` dataset, in particular treating the outliers. We have not found zero or not informed variables. Afterwards, we have performed a feature selection analysis by removing highly correlated variables in order to drop redundant information.
+
+Since the goal of this analysis was to establish the best (multi-)linear relationship among the independent variables and the `quality` score, we have tested for the normality assumption inherent to the linear regression procedure. 
+
+We have also performed statistical tests on the average alcohol amount in wines of low and high quality, as well as on the variances of the distribution of alcohol levels among the different quality values.
+Finally we have trained a linear model, obtaining a rather modest result, which suggests that the functional relationship in this problem, if exists, is more complicated than a linear function. Here we should stress the fact that for this particular problem, the quality score is a rather subjective quantity, and this fact goes along the lines of the results obtained.
+
+We have investigated the fit of the model by making predictions on the dataset and comparing them to the actual values for the `quality` score, and also studied the distribution and mean of the residuals.
+
